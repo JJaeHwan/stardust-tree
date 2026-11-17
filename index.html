@@ -264,6 +264,8 @@ body {
   const size = new Float32Array(N);
   const phase = new Float32Array(N);
   const spin = new Float32Array(N);
+  // 1 이면 자리 잡은 뒤에도 코드 글자로 남고, 0 이면 빛 점(전구·오너먼트·별)이 된다
+  const code = new Float32Array(N);
 
   const setV = (arr, i, x, y, z) => { arr[i * 3] = x; arr[i * 3 + 1] = y; arr[i * 3 + 2] = z; };
   const setC = (arr, i, c, k) => { arr[i * 3] = c[0] * k; arr[i * 3 + 1] = c[1] * k; arr[i * 3 + 2] = c[2] * k; };
@@ -279,8 +281,11 @@ body {
     const r = TREE_R * (1 - h) * tierAt(h) * (0.5 + 0.5 * Math.sqrt(R()));
     const a = R() * Math.PI * 2;
     setV(tree, i, Math.cos(a) * r, Y0 + h * TREE_H, Math.sin(a) * r);
-    if (R() < 0.06) { setC(col, i, WARM, 0.45); size[i] = 70 + R() * 30; }
-    else { setC(col, i, pick(PINES), 0.35 + R() * 0.4); size[i] = 55 + R() * 45; }
+    const roll = R();
+    if (roll < 0.06) { setC(col, i, WARM, 0.45); size[i] = 70 + R() * 30; }
+    // 읽히는 크기의 코드 글자는 일부만 두고, 나머지는 작고 어두운 점으로 트리 부피만 채운다
+    else if (roll < 0.38) { setC(col, i, pick(PINES), 1.0 + R() * 0.5); size[i] = 60; code[i] = 1; }
+    else { setC(col, i, pick(PINES), 0.18 + R() * 0.22); size[i] = 34 + R() * 26; }
     spin[i] = 1;
   }
   // 전구 줄: 두 가닥이 나선으로 감긴다
@@ -330,6 +335,7 @@ body {
     setC(col, i, R() < 0.7 ? ICE : WARM, 0.15 + R() * 0.2);
     size[i] = 45 + R() * 35;
     spin[i] = 1;
+    code[i] = 1;
   }
   // 트리 주변을 떠다니는 반짝이
   for (; i < N; i++) {
@@ -339,6 +345,7 @@ body {
     setC(col, i, R() < 0.5 ? GOLD : WARM, 0.15 + R() * 0.25);
     size[i] = 30 + R() * 40;
     spin[i] = 1;
+    code[i] = 1;
   }
   // 공통: 흩어질 방향, 글자일 때 색, 반짝임 위상
   for (let k = 0; k < N; k++) {
@@ -385,7 +392,7 @@ body {
     c.height = cell * rows;
     const g = c.getContext("2d");
     g.fillStyle = "#fff";
-    g.font = `bold ${Math.round(cell * 0.62)}px "SF Mono", Menlo, Consolas, "Courier New", monospace`;
+    g.font = `bold ${Math.round(cell * 0.74)}px "SF Mono", Menlo, Consolas, "Courier New", monospace`;
     g.textAlign = "center";
     g.textBaseline = "middle";
     chars.forEach((ch, k) => g.fillText(ch, (k % cols + 0.5) * cell, (Math.floor(k / cols) + 0.54) * cell));
@@ -409,6 +416,7 @@ body {
   geo.setAttribute("aFall", new THREE.BufferAttribute(fall, 1));
   geo.setAttribute("aDrop", new THREE.BufferAttribute(drop, 1));
   geo.setAttribute("aGlyph", new THREE.BufferAttribute(glyph, 1));
+  geo.setAttribute("aCode", new THREE.BufferAttribute(code, 1));
 
   const BUILD_DONE = 1e4;
   const pu = {
@@ -448,6 +456,7 @@ body {
       attribute float aFall;
       attribute float aDrop;
       attribute float aGlyph;
+      attribute float aCode;
       varying vec3 vColor;
       varying float vAlpha;
       varying float vGlyph;
@@ -469,7 +478,8 @@ body {
         float fallP = clamp((uBuild - (aLand - aFall)) / aFall, 0.0, 1.0);
         t.y = mix(uTopY + aDrop, t.y, fallP * fallP);
         float shown = step(aLand - aFall, uBuild);
-        float glyphMix = 1.0 - clamp(since / 0.6, 0.0, 1.0);
+        float landMix = 1.0 - clamp(since / 0.6, 0.0, 1.0);
+        float glyphMix = max(landMix, aCode);
         float flash = since >= 0.0 ? exp(-since * 5.0) : 0.0;
         t.y += sin(uTime * 0.9 + aPhase * 40.0) * 0.025;
         vec3 x = aText + vec3(sin(uTime * 1.7 + aPhase * 50.0), cos(uTime * 1.3 + aPhase * 70.0), 0.0) * 0.018;
@@ -477,13 +487,15 @@ body {
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         gl_Position = projectionMatrix * mv;
         float tw = 1.0 - uTwinkle * (0.5 + 0.5 * sin(uTime * (1.2 + aPhase * 3.5) + aPhase * 91.0));
-        float sz = mix(mix(aSize, 62.0, e), 150.0, glyphMix);
+        float settled = mix(mix(aSize, 62.0, e), mix(190.0, 110.0, e), aCode);
+        float sz = mix(settled, 170.0, landMix);
         gl_PointSize = sz * uScale * uPR * (0.85 + 0.3 * tw) / -mv.z;
-        vColor = mix(aColor, aTextColor, e) * (1.0 + glyphMix * 0.9 + flash * 1.6);
+        vColor = mix(aColor, aTextColor, e) * (1.0 + landMix * 0.9 + flash * 1.6);
         vAlpha = tw * shown;
         vGlyph = glyphMix;
-        // 떨어지는 동안에만 글자가 바뀌며 깜빡이고, 닿으면 멈춘다
-        vGlyphIdx = mod(aGlyph + floor(uTime * 7.0 + aPhase * 13.0) * (1.0 - step(0.0, since)), 32.0);
+        // 떨어지는 동안에는 글자가 빠르게 바뀌고, 코드로 남는 입자는 자리 잡은 뒤에도 몇 초에 한 번씩 바뀐다
+        float flicker = since < 0.0 ? 7.0 : 0.3 * aCode;
+        vGlyphIdx = mod(aGlyph + floor(uTime * flicker + aPhase * 13.0), 32.0);
       }
     `,
     fragmentShader: `
